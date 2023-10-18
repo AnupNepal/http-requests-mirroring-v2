@@ -24,7 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/google/gopacket"
@@ -85,35 +85,37 @@ func (h *httpStream) run() {
 	// List of allowed URI paths
 	// allowedPaths := []string{"/v5/SaveOrder"}
 
-	for {
-		// Read bytes until we find the start of an HTTP request (e.g., "POST /v5/SaveOrder HTTP/1.1")
-		var buffer bytes.Buffer
+	// Create a regular expression pattern to match the start of an HTTP request
+	httpRequestPattern := regexp.MustCompile(`(?i)POST (/(?:[^/\s]+[^\r\n]+)) HTTP/\d+\.\d+`)
 
-		for {
-			b, err := buf.ReadByte()
-			if err == io.EOF {
-				// This indicates the end of the stream.
-				return
-			} else if err != nil {
-				log.Println("Error reading stream", h.net, h.transport, ":", err)
-				continue // Skip to the next iteration if there's an error
-			}
-			buffer.WriteByte(b)
-			if buffer.Len() >= 4 && buffer.String()[buffer.Len()-4:] == "\r\n\r\n" {
-				log.Println("Reached end of a HTTP Request, breaking out of the inner loop")
-				break
-			}
+	var pendingData []byte
+
+	for {
+		// Read bytes from the buffer until there's no more data
+		data, err := buf.ReadBytes('\n')
+		if err == io.EOF {
+			// This indicates the end of the stream.
+			return
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
+			continue // Skip to the next iteration if there's an error
 		}
 
-		// Check if the start of the request matches "POST /v5/SaveOrder"
-		requestStart := buffer.String()
-		log.Println("Buffer string line contents:", requestStart)
-		if strings.HasPrefix(requestStart, "POST /v5/SaveOrder") {
+		// Concatenate the newly read data with any pending data
+		pendingData = append(pendingData, data...)
+
+		// Look for matches in the pending data
+		matches := httpRequestPattern.FindAllSubmatch(pendingData, -1)
+
+		// Process each match as a new HTTP request
+		for _, match := range matches {
+			requestStart := match[0]
+			// requestURI := string(match[1])
+
 			// Now that we found the start of the HTTP request, create a new HTTP request
-			req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestStart)))
+			req, reqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(requestStart)))
 			if reqErr != nil {
 				log.Println("Error reading HTTP request:", reqErr)
-				buffer.Reset()
 				continue // Skip to the next iteration if there's an error
 			}
 
@@ -130,6 +132,9 @@ func (h *httpStream) run() {
 				log.Println("Request Body:", string(body)) // Log the request body
 				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
+
+			// Remove the processed data from pendingData
+			pendingData = bytes.Trim(pendingData[len(requestStart):], "\n")
 		}
 	}
 }
