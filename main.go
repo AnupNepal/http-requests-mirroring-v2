@@ -84,13 +84,22 @@ func (h *httpStream) run() {
 	// List of allowed URI paths
 	allowedPaths := []string{"/v5/SaveOrder"}
 
+	var partialRequest bool
+
 	for {
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
 			// We must read until we see an EOF... very important!
 			return
 		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
+			if partialRequest {
+				// Handle the case where we started in the middle of a request
+				log.Println("Partial request detected. Recovering...")
+				partialRequest = false
+				continue
+			} else {
+				log.Println("Error reading stream", h.net, h.transport, ":", err)
+			}
 		} else {
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
@@ -106,6 +115,9 @@ func (h *httpStream) run() {
 				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
 		}
+
+		// Set partialRequest flag to true to handle subsequent incomplete requests
+		partialRequest = true
 	}
 }
 
