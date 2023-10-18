@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"hash/crc64"
 	"io"
+	"io/ioutil"
 	"log"
 	math_rand "math/rand"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -70,7 +72,22 @@ type loggingReader struct {
 func (lr *loggingReader) Read(p []byte) (n int, err error) {
 	n, err = lr.originalReader.Read(p)
 	if n > 0 {
-		log.Printf("TCP Line: %s", string(p[:n]))
+		requestString := string(p[:n])
+		log.Printf("TCP Line: %s", requestString)
+
+		// Now you can use http.ReadRequest on requestString
+		req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestString)))
+		if reqErr != nil {
+			log.Println("Error reading HTTP request:", reqErr)
+		} else {
+			body, bErr := ioutil.ReadAll(req.Body)
+			if bErr != nil {
+				return
+			}
+			req.Body.Close()
+			log.Println("Request Body:", string(body)) // Log the request body
+			go forwardRequest(req, body)
+		}
 	}
 	return n, err
 }
@@ -96,17 +113,7 @@ func (h *httpStream) run() {
 	}
 }
 
-// Function to check if a string is in a slice
-func contains(slice []string, str string) bool {
-	for _, s := range slice {
-		if s == str {
-			return true
-		}
-	}
-	return false
-}
-
-func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
+func forwardRequest(req *http.Request, body []byte) {
 
 	// if percentage flag is not 100, then a percentage of requests is skipped
 	if *fwdPerc != 100 {
@@ -127,8 +134,6 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 			strForSeed := ""
 			if *fwdBy == "header" {
 				strForSeed = req.Header.Get(*fwdHeader)
-			} else {
-				strForSeed = reqSourceIP
 			}
 			crc64Table := crc64.MakeTable(0xC96C5795D7870F42)
 			// uintForSeed is derived from strForSeed
@@ -162,12 +167,9 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 
 	// Append to X-Forwarded-For the IP of the client or the IP of the latest proxy (if any proxies are in between)
 	// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
-	forwardReq.Header.Add("X-Forwarded-For", reqSourceIP)
+	// forwardReq.Header.Add("X-Forwarded-For", reqSourceIP)
 	// The three following headers should contain 1 value only, i.e. the outermost port, protocol, and host
 	// https://tools.ietf.org/html/rfc7239#section-5.4
-	if forwardReq.Header.Get("X-Forwarded-Port") == "" {
-		forwardReq.Header.Set("X-Forwarded-Port", reqDestionationPort)
-	}
 	if forwardReq.Header.Get("X-Forwarded-Proto") == "" {
 		forwardReq.Header.Set("X-Forwarded-Proto", "http")
 	}
