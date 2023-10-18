@@ -70,10 +70,23 @@ type loggingReader struct {
 }
 
 func (lr *loggingReader) Read(p []byte) (n int, err error) {
-	n, err = lr.originalReader.Read(p)
+	// Read bytes into a temporary buffer
+	tmpBuffer := make([]byte, len(p))
+	n, err = lr.originalReader.Read(tmpBuffer)
 	if n > 0 {
+		// Search for "\r\n\r\n" delimiter in the received data
+		startIndex := bytes.Index(tmpBuffer, []byte("\r\n\r\n"))
+		if startIndex != -1 {
+			// Copy the data up to and including the delimiter to 'p'
+			copy(p, tmpBuffer[:startIndex+4])
+		} else {
+			// If the delimiter is not found, copy the entire data
+			copy(p, tmpBuffer)
+		}
+
 		requestString := string(p[:n])
 		log.Printf("TCP Line: %s", requestString)
+		log.Printf("End TCP Line")
 
 		// Now you can use http.ReadRequest on requestString
 		req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestString)))
