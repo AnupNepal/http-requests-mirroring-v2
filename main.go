@@ -235,7 +235,6 @@ func main() {
 			if packet == nil {
 				return
 			}
-			log.Println("packet:", packet)
 			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
 				log.Println("Unusable packet")
 				continue
