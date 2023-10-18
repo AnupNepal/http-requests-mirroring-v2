@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -64,15 +65,36 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	return &hstream.r
 }
 
-func (h *httpStream) run() {
-	buf := bufio.NewReader(&h.r)
-	for {
-		req, err := http.ReadRequest(buf)
-		if err == io.EOF {
-			// We must read until we see an EOF... very important!
-			return
-		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
+type loggingReader struct {
+	originalReader io.Reader
+}
+
+func (lr *loggingReader) Read(p []byte) (n int, err error) {
+	// Read bytes into a temporary buffer
+	tmpBuffer := make([]byte, len(p))
+	n, err = lr.originalReader.Read(tmpBuffer)
+	if n > 0 {
+		// Search for "\r\n\r\n\r\n" delimiter in the received data
+		startIndex := bytes.Index(tmpBuffer, []byte("\r\n\r\n\r\n"))
+		if startIndex != -1 {
+			// Copy the data up to and including the delimiter to 'p'
+			copy(p, tmpBuffer[:startIndex+4])
+		} else {
+			// If the delimiter is not found, copy the entire data
+			copy(p, tmpBuffer)
+
+			println("Buffer delimiter of \\r\\n\\r\\n\\r\\n not found")
+		}
+
+		requestString := string(p[:n])
+
+		log.Printf("TCP Line: %s", requestString)
+		log.Printf("End TCP Line")
+
+		// Now you can use http.ReadRequest on requestString
+		req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestString)))
+		if reqErr != nil {
+			log.Println("Error reading HTTP request:", reqErr)
 		} else {
 			body, bErr := ioutil.ReadAll(req.Body)
 			if bErr != nil {
@@ -80,8 +102,30 @@ func (h *httpStream) run() {
 			}
 			req.Body.Close()
 			log.Println("Request Body:", string(body)) // Log the request body
-			forwardRequest(req, body)
+			go forwardRequest(req, body)
 		}
+	}
+	return n, err
+}
+
+func (h *httpStream) run() {
+	// Wrap the existing reader with the logging reader
+	logReader := &loggingReader{originalReader: &h.r}
+	buf := bufio.NewReader(logReader)
+
+	for {
+		// Read bytes from the buffer until there's no more data
+		data, err := buf.ReadBytes('\n')
+		if err == io.EOF {
+			// This indicates the end of the stream.
+			return
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
+			continue // Skip to the next iteration if there's an error
+		}
+
+		// Log the raw data as it is without further processing
+		log.Println("Raw Data:", string(data))
 	}
 }
 
@@ -235,6 +279,7 @@ func main() {
 			if packet == nil {
 				return
 			}
+			log.Println("packet:", packet)
 			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
 				log.Println("Unusable packet")
 				continue
