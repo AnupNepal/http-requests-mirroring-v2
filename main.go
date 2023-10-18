@@ -100,12 +100,14 @@ func (h *httpStream) run() {
 			}
 			buffer.WriteByte(b)
 			if buffer.Len() >= 4 && buffer.String()[buffer.Len()-4:] == "\r\n\r\n" {
+				log.Println("Reached end of a HTTP Request, breaking out of the inner loop")
 				break
 			}
 		}
 
 		// Check if the start of the request matches "POST /v5/SaveOrder"
 		requestStart := buffer.String()
+		log.Println("Buffer string line contents:", requestStart)
 		if strings.HasPrefix(requestStart, "POST /v5/SaveOrder") {
 			// Now that we found the start of the HTTP request, create a new HTTP request
 			req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestStart)))
