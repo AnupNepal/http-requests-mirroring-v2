@@ -80,6 +80,10 @@ func (h *httpStream) run() {
 	// Wrap the existing reader with the logging reader
 	logReader := &loggingReader{originalReader: &h.r}
 	buf := bufio.NewReader(logReader)
+
+	// List of allowed URI paths
+	allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
+
 	for {
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
@@ -90,8 +94,9 @@ func (h *httpStream) run() {
 		} else {
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
-			// Check if the request method is POST and the request URI matches the desired path
-			if req.Method == "POST" && req.URL.Path == "/v5/SaveOrder" && req.Proto == "HTTP/1.1" {
+
+			// Check if the request method is POST and the request URI matches the desired paths
+			if req.Method == "POST" && contains(allowedPaths, req.URL.Path) && req.Proto == "HTTP/1.1" {
 				body, bErr := ioutil.ReadAll(req.Body)
 				if bErr != nil {
 					return
@@ -102,6 +107,16 @@ func (h *httpStream) run() {
 			}
 		}
 	}
+}
+
+// Function to check if a string is in a slice
+func contains(slice []string, str string) bool {
+	for _, s := range slice {
+		if s == str {
+			return true
+		}
+	}
+	return false
 }
 
 func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
