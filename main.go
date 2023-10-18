@@ -72,33 +72,12 @@ type loggingReader struct {
 func (lr *loggingReader) Read(p []byte) (n int, err error) {
 	n, err = lr.originalReader.Read(p)
 	if n > 0 {
-		rawData := p[:n]
+		logString := string(p[:n])
+		s := strings.ReplaceAll(logString, "\n", `\n`)
+		s2 := strings.ReplaceAll(s, "\r", `\r`)
 
-		// Manually replace line endings with "\\n" in the log output
-		logString := ""
-		for _, b := range rawData {
-			if b == '\n' {
-				logString += "\\n"
-			} else {
-				logString += string(b)
-			}
-		}
-		log.Printf("TCP Line: %s", logString)
+		log.Printf("TCP Line:", s2)
 		log.Printf("End TCP Line")
-
-		// Now you can use http.ReadRequest on requestString
-		req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(logString)))
-		if reqErr != nil {
-			log.Println("Error reading HTTP request:", reqErr)
-		} else {
-			body, bErr := ioutil.ReadAll(req.Body)
-			if bErr != nil {
-				return
-			}
-			req.Body.Close()
-			log.Println("Request Body:", string(body)) // Log the request body
-			go forwardRequest(req, body)
-		}
 	}
 	return n, err
 }
@@ -110,17 +89,19 @@ func (h *httpStream) run() {
 
 	for {
 		// Read bytes from the buffer until there's no more data
-		data, err := buf.ReadBytes('\n')
-		if err == io.EOF {
-			// This indicates the end of the stream.
-			return
-		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
-			continue // Skip to the next iteration if there's an error
-		}
+		req, err := http.ReadRequest(buf)
+		if err != nil {
+			log.Println("Error reading HTTP request:", err)
+		} else {
+			body, bErr := ioutil.ReadAll(req.Body)
+			if bErr != nil {
+				return
+			}
+			req.Body.Close()
+			log.Println("Request Body:", string(body)) // Log the request body
+			go forwardRequest(req, body)
 
-		// Log the raw data as it is without further processing
-		log.Println("Raw Data:", string(data))
+		}
 	}
 }
 
