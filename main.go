@@ -90,6 +90,9 @@ func (h *httpStream) run() {
 	for {
 		// Read bytes from the buffer until there's no more data
 		req, err := http.ReadRequest(buf)
+		if err == io.EOF {
+			// We must read until we see an EOF... very important!
+			return
 		if err != nil {
 			log.Println("Error reading HTTP request:", err)
 		} else {
