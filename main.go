@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -82,47 +81,24 @@ func (h *httpStream) run() {
 	logReader := &loggingReader{originalReader: &h.r}
 	buf := bufio.NewReader(logReader)
 
-	// // List of allowed URI paths
-	// allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
-
-	var buffer bytes.Buffer
+	// List of allowed URI paths
+	allowedPaths := []string{"/v5/SaveOrder"}
 
 	for {
-		// Read bytes until we find the start of an HTTP request (e.g., "POST /v5/SaveOrder HTTP/1.1")
-		for {
-			b, err := buf.ReadByte()
-			if err == io.EOF {
-				log.Println("End of file, waiting for next")
-			} else if err != nil {
-				log.Println("Error reading stream", h.net, h.transport, ":", err)
-				return
-			}
-			buffer.WriteByte(b)
-			if buffer.Len() >= 4 && buffer.String()[buffer.Len()-4:] == "\r\n\r\n" {
-				break
-			}
-		}
-
-		// Check if the start of the request matches "POST /v5/SaveOrder" or "POST /v5/UpdateOrder"
-		requestStart := buffer.String()
-		if strings.HasPrefix(requestStart, "POST /v5/SaveOrder") || strings.HasPrefix(requestStart, "POST /v5/UpdateOrder") {
-			// Now that we found the start of the HTTP request, create a new HTTP request
-			req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(requestStart)))
-			if err == io.EOF {
-				log.Println("End of file, ending loop")
-				return
-			} else if err != nil {
-				log.Println("Error reading HTTP request:", err)
-			}
-
+		req, err := http.ReadRequest(buf)
+		if err == io.EOF {
+			// We must read until we see an EOF... very important!
+			return
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
+		} else {
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
 
 			// Check if the request method is POST and the request URI matches the desired paths
-			if req.Method == "POST" {
+			if req.Method == "POST" && contains(allowedPaths, req.URL.Path) && req.Proto == "HTTP/1.1" {
 				body, bErr := ioutil.ReadAll(req.Body)
 				if bErr != nil {
-					log.Println("Error reading request body:", bErr)
 					return
 				}
 				req.Body.Close()
@@ -130,9 +106,6 @@ func (h *httpStream) run() {
 				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
 		}
-
-		// Clear the buffer for the next HTTP request
-		buffer.Reset()
 	}
 }
 
