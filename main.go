@@ -65,25 +65,57 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 }
 
 func (h *httpStream) run() {
-	buf := bufio.NewReader(&h.r)
-	for {
-		req, err := http.ReadRequest(buf)
-		if err == io.EOF {
-			// We must read until we see an EOF... very important!
-			return
-		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
-		} else {
-			reqSourceIP := h.net.Src().String()
-			reqDestionationPort := h.transport.Dst().String()
-			body, bErr := ioutil.ReadAll(req.Body)
-			if bErr != nil {
-				return
-			}
-			req.Body.Close()
-			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
-		}
-	}
+    buf := bufio.NewReader(&h.r)
+    var requestBuffer bytes.Buffer
+    readingRequestLine := true
+
+    for {
+        line, err := buf.ReadString('\n')
+        if err == io.EOF {
+            // End of the stream
+            if readingRequestLine {
+                // Handle the incomplete request line if present
+                processHTTPRequest(requestBuffer)
+            }
+            return
+        } else if err != nil {
+            log.Println("Error reading stream", h.net, h.transport, ":", err)
+            return
+        }
+
+        if readingRequestLine {
+            // This is the first line of an HTTP request (request line)
+            // Start reading the request line
+            requestBuffer.WriteString(line)
+            readingRequestLine = false
+        } else {
+            // This is part of the HTTP headers or body
+            if line == "\r\n" {
+                // An empty line indicates the end of headers
+                // Now, we have the complete request line and headers
+                // Process the complete HTTP request
+                processHTTPRequest(requestBuffer)
+                // Reset the buffer for the next request
+                requestBuffer.Reset()
+                readingRequestLine = true
+            } else {
+                // Continue reading headers and body
+                requestBuffer.WriteString(line)
+            }
+        }
+    }
+}
+
+func processHTTPRequest(requestBuffer bytes.Buffer) {
+    // At this point, requestBuffer contains the complete HTTP request (request line + headers).
+    // You can pass this data to your forwardRequest function for parsing.
+    // Example:
+    reqSourceIP := h.net.Src().String()
+    reqDestionationPort := h.transport.Dst().String()
+    requestBytes := requestBuffer.Bytes()
+
+    // Call your forwardRequest function here with the extracted request data
+    go forwardRequest(reqSourceIP, reqDestionationPort, requestBytes)
 }
 
 func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
