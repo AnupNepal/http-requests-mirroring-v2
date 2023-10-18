@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -82,11 +83,8 @@ func (h *httpStream) run() {
 	logReader := &loggingReader{originalReader: &h.r}
 	buf := bufio.NewReader(logReader)
 
-	// List of allowed URI paths
-	// allowedPaths := []string{"/v5/SaveOrder"}
-
 	// Create a regular expression pattern to match the start of an HTTP request
-	httpRequestPattern := regexp.MustCompile(`(?i)POST (/(?:[^/\s]+[^\r\n]+)) HTTP/\d+\.\d+`)
+	httpRequestPattern := regexp.MustCompile(`(?i)(POST \S+ \S+ \S+)`)
 
 	var pendingData []byte
 
@@ -105,36 +103,43 @@ func (h *httpStream) run() {
 		pendingData = append(pendingData, data...)
 
 		// Look for matches in the pending data
-		matches := httpRequestPattern.FindAllSubmatch(pendingData, -1)
+		matches := httpRequestPattern.FindSubmatch(pendingData)
 
-		// Process each match as a new HTTP request
-		for _, match := range matches {
-			requestStart := match[0]
-			// requestURI := string(match[1])
+		if matches != nil {
+			requestStart := matches[0]
 
-			// Now that we found the start of the HTTP request, create a new HTTP request
-			req, reqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(requestStart)))
-			if reqErr != nil {
-				log.Println("Error reading HTTP request:", reqErr)
-				continue // Skip to the next iteration if there's an error
-			}
-
-			reqSourceIP := h.net.Src().String()
-			reqDestionationPort := h.transport.Dst().String()
-
-			// Check if the request method is POST and the request URI matches the desired paths
-			if req.Method == "POST" {
-				body, bErr := ioutil.ReadAll(req.Body)
-				if bErr != nil {
+			// Check if the start of the request matches "POST /v5/SaveOrder"
+			if strings.HasPrefix(string(requestStart), "POST /v5/SaveOrder") {
+				// Now that we found the start of the HTTP request, read the entire request
+				fullRequest, readErr := buf.ReadBytes('\n')
+				if readErr != nil {
+					log.Println("Error reading buffer:", readErr)
 					continue // Skip to the next iteration if there's an error
 				}
-				req.Body.Close()
-				log.Println("Request Body:", string(body)) // Log the request body
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
-			}
 
-			// Remove the processed data from pendingData
-			pendingData = bytes.Trim(pendingData[len(requestStart):], "\n")
+				req, reqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(fullRequest)))
+				if reqErr != nil {
+					log.Println("Error reading HTTP request:", reqErr)
+					continue // Skip to the next iteration if there's an error
+				}
+
+				reqSourceIP := h.net.Src().String()
+				reqDestionationPort := h.transport.Dst().String()
+
+				// Check if the request method is POST and the request URI matches the desired paths
+				if req.Method == "POST" {
+					body, bErr := ioutil.ReadAll(req.Body)
+					if bErr != nil {
+						continue // Skip to the next iteration if there's an error
+					}
+					req.Body.Close()
+					log.Println("Request Body:", string(body)) // Log the request body
+					go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+				}
+
+				// Reset pendingData to an empty slice
+				pendingData = nil
+			}
 		}
 	}
 }
