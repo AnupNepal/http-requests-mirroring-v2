@@ -18,12 +18,14 @@ import (
 	"fmt"
 	"hash/crc64"
 	"io"
+	"io/ioutil"
 	"log"
 	math_rand "math/rand"
 	"net"
 	"net/http"
 	"os"
 	"time"
+	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/examples/util"
@@ -65,70 +67,77 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 
 type loggingReader struct {
 	originalReader io.Reader
-	buffer         *bytes.Buffer
-	complete       bool
-}
-
-func NewLoggingReader(original io.Reader) *loggingReader {
-	return &loggingReader{
-		originalReader: original,
-		buffer:         &bytes.Buffer{},
-		complete:       false,
-	}
 }
 
 func (lr *loggingReader) Read(p []byte) (n int, err error) {
 	n, err = lr.originalReader.Read(p)
 	if n > 0 {
-		lr.buffer.Write(p[:n])
-		if bytes.Contains(lr.buffer.Bytes(), []byte("\r\n\r\n")) {
-			// You've collected the entire HTTP request
-			lr.complete = true
-		}
+		log.Printf("TCP Line: %s", string(p[:n]))
 	}
 	return n, err
 }
 
-func (lr *loggingReader) Complete() bool {
-	return lr.complete
-}
-
-func (lr *loggingReader) RequestData() string {
-	return lr.buffer.String()
-}
-
 func (h *httpStream) run() {
 	// Wrap the existing reader with the logging reader
-	logReader := NewLoggingReader(&h.r)
+	logReader := &loggingReader{originalReader: &h.r}
 	buf := bufio.NewReader(logReader)
 
 	// List of allowed URI paths
 	allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
 
+	var buffer bytes.Buffer
+
 	for {
-		req, err := http.ReadRequest(buf)
-		if err == io.EOF {
-			// We must read until we see an EOF... very important!
-			log.Println("End of file, ending loop")
-			return
-		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
-		} else {
+		// Read bytes until we find the start of an HTTP request (e.g., "POST /v5/SaveOrder HTTP/1.1")
+		for {
+			b, err := buf.ReadByte()
+			if err == io.EOF {
+				log.Println("End of file, ending loop")
+				return
+			} else if err != nil {
+				log.Println("Error reading stream", h.net, h.transport, ":", err)
+				return
+			}
+			buffer.WriteByte(b)
+			if buffer.Len() >= 4 && buffer.String()[buffer.Len()-4:] == "\r\n\r\n" {
+				break
+			}
+		}
+
+		// Check if the start of the request matches "POST /v5/SaveOrder" or "POST /v5/UpdateOrder"
+		requestStart := buffer.String()
+		if strings.HasPrefix(requestStart, "POST /v5/SaveOrder") || strings.HasPrefix(requestStart, "POST /v5/UpdateOrder") {
+			// Now that we found the start of the HTTP request, create a new HTTP request
+			req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(requestStart)))
+			if err == io.EOF {
+				log.Println("End of file, ending loop")
+				return
+			} else if err != nil {
+				log.Println("Error reading HTTP request:", err)
+			}
+
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
 
 			// Check if the request method is POST and the request URI matches the desired paths
-			if req.Method == "POST" && contains(allowedPaths, req.URL.Path) && req.Proto == "HTTP/1.1" {
-				for !logReader.Complete() {
-					// Keep reading until you've collected the entire HTTP request
+			if req.Method == "POST" {
+				body, bErr := ioutil.ReadAll(req.Body)
+				if bErr != nil {
+					log.Println("Error reading request body:", bErr)
+					return
 				}
-				body := logReader.RequestData()
-				log.Println("Complete Request Data:", body) // Log the complete request
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, []byte(body))
+				req.Body.Close()
+				log.Println("Request Body:", string(body)) // Log the request body
+				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
 		}
+
+		// Clear the buffer for the next HTTP request
+		buffer.Reset()
 	}
 }
+
+
 
 // Function to check if a string is in a slice
 func contains(slice []string, str string) bool {
