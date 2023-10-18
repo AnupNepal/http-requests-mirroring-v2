@@ -18,14 +18,11 @@ import (
 	"fmt"
 	"hash/crc64"
 	"io"
-	"io/ioutil"
 	"log"
 	math_rand "math/rand"
 	"net"
 	"net/http"
 	"os"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -83,11 +80,6 @@ func (h *httpStream) run() {
 	logReader := &loggingReader{originalReader: &h.r}
 	buf := bufio.NewReader(logReader)
 
-	// Create a regular expression pattern to match the start of an HTTP request
-	httpRequestPattern := regexp.MustCompile(`(?i)(POST \S+ \S+ \S+)`)
-
-	var pendingData []byte
-
 	for {
 		// Read bytes from the buffer until there's no more data
 		data, err := buf.ReadBytes('\n')
@@ -99,50 +91,8 @@ func (h *httpStream) run() {
 			continue // Skip to the next iteration if there's an error
 		}
 
-		// Concatenate the newly read data with any pending data
-		pendingData = append(pendingData, data...)
-
-		log.Println("Pending data:", string(pendingData))
-
-		// Look for matches in the pending data
-		matches := httpRequestPattern.FindSubmatch(pendingData)
-
-		if matches != nil {
-			requestStart := matches[0]
-
-			// Check if the start of the request matches "POST /v5/SaveOrder"
-			if strings.HasPrefix(string(requestStart), "POST /v5/SaveOrder") {
-				// Now that we found the start of the HTTP request, read the entire request
-				fullRequest, readErr := buf.ReadBytes('\n')
-				if readErr != nil {
-					log.Println("Error reading buffer:", readErr)
-					continue // Skip to the next iteration if there's an error
-				}
-
-				req, reqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(fullRequest)))
-				if reqErr != nil {
-					log.Println("Error reading HTTP request:", reqErr)
-					continue // Skip to the next iteration if there's an error
-				}
-
-				reqSourceIP := h.net.Src().String()
-				reqDestionationPort := h.transport.Dst().String()
-
-				// Check if the request method is POST and the request URI matches the desired paths
-				if req.Method == "POST" {
-					body, bErr := ioutil.ReadAll(req.Body)
-					if bErr != nil {
-						continue // Skip to the next iteration if there's an error
-					}
-					req.Body.Close()
-					log.Println("Request Body:", string(body)) // Log the request body
-					go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
-				}
-
-				// Reset pendingData to an empty slice
-				pendingData = nil
-			}
-		}
+		// Log the raw data as it is without further processing
+		log.Println("Raw Data:", string(data))
 	}
 }
 
