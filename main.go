@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -82,7 +83,7 @@ func (h *httpStream) run() {
 	buf := bufio.NewReader(logReader)
 
 	// List of allowed URI paths
-	allowedPaths := []string{"/v5/SaveOrder"}
+	// allowedPaths := []string{"/v5/SaveOrder"}
 
 	for {
 		// Read bytes until we find the start of an HTTP request (e.g., "POST /v5/SaveOrder HTTP/1.1")
@@ -107,7 +108,7 @@ func (h *httpStream) run() {
 		requestStart := buffer.String()
 		if strings.HasPrefix(requestStart, "POST /v5/SaveOrder") {
 			// Now that we found the start of the HTTP request, create a new HTTP request
-			req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestStart))
+			req, reqErr := http.ReadRequest(bufio.NewReader(strings.NewReader(requestStart)))
 			if reqErr != nil {
 				log.Println("Error reading HTTP request:", reqErr)
 				buffer.Reset()
