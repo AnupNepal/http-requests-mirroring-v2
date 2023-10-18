@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -67,14 +68,17 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 func (h *httpStream) run() {
 	buf := bufio.NewReader(&h.r)
 	var data []byte
-	startOfRequest := false
+	var methodFound bool
+	var headerComplete bool
 
 	for {
 		b, err := buf.ReadByte()
 		if err != nil {
 			if err == io.EOF {
-				if startOfRequest {
-					log.Println("Incomplete HTTP request")
+				if !methodFound {
+					log.Println("Incomplete HTTP request: Method not found")
+				} else if !headerComplete {
+					log.Println("Incomplete HTTP request: Headers not found")
 				}
 				return
 			}
@@ -84,14 +88,21 @@ func (h *httpStream) run() {
 
 		data = append(data, b)
 
-		// Check if we've found the start of an HTTP request.
-		if len(data) >= 4 {
-			if string(data[len(data)-4:]) == "\r\n\r\n" {
-				startOfRequest = true
+		if !methodFound && len(data) > 4 {
+			// Check if we've found the start of an HTTP request.
+			if isHTTPMethod(data) {
+				methodFound = true
 			}
 		}
 
-		if startOfRequest {
+		if methodFound && !headerComplete {
+			// Check if we've reached the end of HTTP headers.
+			if bytesHasPrefix(data, []byte("\r\n\r\n")) {
+				headerComplete = true
+			}
+		}
+
+		if methodFound && headerComplete {
 			req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(data)))
 			if err != nil {
 				log.Println("Error parsing HTTP request:", err)
@@ -106,11 +117,32 @@ func (h *httpStream) run() {
 				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
 			data = nil
-			startOfRequest = false
+			methodFound = false
+			headerComplete = false
 		}
 	}
 }
 
+func isHTTPMethod(data []byte) bool {
+	// Define a list of valid HTTP methods.
+	validMethods := []string{"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE"}
+
+	// Convert the data to a string and check if it's in the list of valid methods.
+	requestLine := string(data)
+	for _, validMethod := range validMethods {
+		if strings.HasPrefix(requestLine, validMethod) {
+			return true
+		}
+	}
+	return false
+}
+
+func bytesHasPrefix(data, prefix []byte) bool {
+	if len(data) < len(prefix) {
+		return false
+	}
+	return bytes.Equal(data[:len(prefix)], prefix)
+}
 func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
 
 	// if percentage flag is not 100, then a percentage of requests is skipped
