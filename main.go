@@ -92,8 +92,7 @@ func (h *httpStream) run() {
 		for {
 			b, err := buf.ReadByte()
 			if err == io.EOF {
-				log.Println("End of file, ending loop")
-				return
+				log.Println("End of file, waiting for next")
 			} else if err != nil {
 				log.Println("Error reading stream", h.net, h.transport, ":", err)
 				return
