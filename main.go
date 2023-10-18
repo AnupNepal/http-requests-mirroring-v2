@@ -93,18 +93,18 @@ func (h *httpStream) run() {
 		if err == io.EOF {
 			// We must read until we see an EOF... very important!
 			return
-			if err != nil {
-				log.Println("Error reading HTTP request:", err)
-			} else {
-				body, bErr := ioutil.ReadAll(req.Body)
-				if bErr != nil {
-					return
-				}
-				req.Body.Close()
-				log.Println("Request Body:", string(body)) // Log the request body
-				go forwardRequest(req, body)
-
+		}
+		if err != nil {
+			log.Println("Error reading HTTP request:", err)
+		} else {
+			body, bErr := ioutil.ReadAll(req.Body)
+			if bErr != nil {
+				return
 			}
+			req.Body.Close()
+			log.Println("Request Body:", string(body)) // Log the request body
+			go forwardRequest(req, body)
+
 		}
 	}
 }
