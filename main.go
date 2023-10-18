@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -65,84 +64,42 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	return &hstream.r
 }
 
-func (h *httpStream) run() {
-	buf := bufio.NewReader(&h.r)
-	var data []byte
-	var methodFound bool
-	var headerComplete bool
+type loggingReader struct {
+	originalReader io.Reader
+}
 
+func (lr *loggingReader) Read(p []byte) (n int, err error) {
+	n, err = lr.originalReader.Read(p)
+	if n > 0 {
+		log.Printf("TCP Line: %s", string(p[:n]))
+	}
+	return n, err
+}
+
+func (h *httpStream) run() {
+	// Wrap the existing reader with the logging reader
+	logReader := &loggingReader{originalReader: &h.r}
+	buf := bufio.NewReader(logReader)
 	for {
-		b, err := buf.ReadByte()
-		if err != nil {
-			if err == io.EOF {
-				if !methodFound {
-					log.Println("Incomplete HTTP request: Method not found")
-				} else if !headerComplete {
-					log.Println("Incomplete HTTP request: Headers not found")
-				}
+		req, err := http.ReadRequest(buf)
+		if err == io.EOF {
+			// We must read until we see an EOF... very important!
+			return
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
+		} else {
+			reqSourceIP := h.net.Src().String()
+			reqDestionationPort := h.transport.Dst().String()
+			body, bErr := ioutil.ReadAll(req.Body)
+			if bErr != nil {
 				return
 			}
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
-			return
-		}
-
-		data = append(data, b)
-
-		if !methodFound && len(data) > 4 {
-			// Check if we've found the start of an HTTP request.
-			if isHTTPMethod(data) {
-				methodFound = true
-			}
-		}
-
-		if methodFound && !headerComplete {
-			// Check if we've reached the end of HTTP headers.
-			if bytesHasPrefix(data, []byte("\r\n\r\n")) {
-				headerComplete = true
-			}
-		}
-
-		if methodFound && headerComplete {
-			req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(data)))
-			if err != nil {
-				log.Println("Error parsing HTTP request:", err)
-			} else {
-				reqSourceIP := h.net.Src().String()
-				reqDestionationPort := h.transport.Dst().String()
-				body, bErr := ioutil.ReadAll(req.Body)
-				if bErr != nil {
-					return
-				}
-				req.Body.Close()
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
-			}
-			data = nil
-			methodFound = false
-			headerComplete = false
+			req.Body.Close()
+			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 		}
 	}
 }
 
-func isHTTPMethod(data []byte) bool {
-	// Define a list of valid HTTP methods.
-	validMethods := []string{"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE"}
-
-	// Convert the data to a string and check if it's in the list of valid methods.
-	requestLine := string(data)
-	for _, validMethod := range validMethods {
-		if strings.HasPrefix(requestLine, validMethod) {
-			return true
-		}
-	}
-	return false
-}
-
-func bytesHasPrefix(data, prefix []byte) bool {
-	if len(data) < len(prefix) {
-		return false
-	}
-	return bytes.Equal(data[:len(prefix)], prefix)
-}
 func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
 
 	// if percentage flag is not 100, then a percentage of requests is skipped
