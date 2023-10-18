@@ -102,6 +102,8 @@ func (h *httpStream) run() {
 		// Concatenate the newly read data with any pending data
 		pendingData = append(pendingData, data...)
 
+		log.Println("Pending data:", string(pendingData))
+
 		// Look for matches in the pending data
 		matches := httpRequestPattern.FindSubmatch(pendingData)
 
