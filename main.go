@@ -82,7 +82,7 @@ func (h *httpStream) run() {
 	buf := bufio.NewReader(logReader)
 
 	// List of allowed URI paths
-	allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
+	allowedPaths := []string{"/v5/SaveOrder"}
 
 	for {
 		req, err := http.ReadRequest(buf)
