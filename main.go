@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"hash/crc64"
 	"io"
-	"io/ioutil"
 	"log"
 	math_rand "math/rand"
 	"net"
@@ -66,28 +65,51 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 
 type loggingReader struct {
 	originalReader io.Reader
+	buffer         *bytes.Buffer
+	complete       bool
+}
+
+func NewLoggingReader(original io.Reader) *loggingReader {
+	return &loggingReader{
+		originalReader: original,
+		buffer:         &bytes.Buffer{},
+		complete:       false,
+	}
 }
 
 func (lr *loggingReader) Read(p []byte) (n int, err error) {
 	n, err = lr.originalReader.Read(p)
 	if n > 0 {
-		log.Printf("TCP Line: %s", string(p[:n]))
+		lr.buffer.Write(p[:n])
+		if bytes.Contains(lr.buffer.Bytes(), []byte("\r\n\r\n")) {
+			// You've collected the entire HTTP request
+			lr.complete = true
+		}
 	}
 	return n, err
 }
 
+func (lr *loggingReader) Complete() bool {
+	return lr.complete
+}
+
+func (lr *loggingReader) RequestData() string {
+	return lr.buffer.String()
+}
+
 func (h *httpStream) run() {
 	// Wrap the existing reader with the logging reader
-	logReader := &loggingReader{originalReader: &h.r}
+	logReader := NewLoggingReader(&h.r)
 	buf := bufio.NewReader(logReader)
 
 	// List of allowed URI paths
-	allowedPaths := []string{"/v5/SaveOrder"}
+	allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
 
 	for {
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
 			// We must read until we see an EOF... very important!
+			log.Println("End of file, ending loop")
 			return
 		} else if err != nil {
 			log.Println("Error reading stream", h.net, h.transport, ":", err)
@@ -97,13 +119,12 @@ func (h *httpStream) run() {
 
 			// Check if the request method is POST and the request URI matches the desired paths
 			if req.Method == "POST" && contains(allowedPaths, req.URL.Path) && req.Proto == "HTTP/1.1" {
-				body, bErr := ioutil.ReadAll(req.Body)
-				if bErr != nil {
-					return
+				for !logReader.Complete() {
+					// Keep reading until you've collected the entire HTTP request
 				}
-				req.Body.Close()
-				log.Println("Request Body:", string(body)) // Log the request body
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+				body := logReader.RequestData()
+				log.Println("Complete Request Data:", body) // Log the complete request
+				go forwardRequest(req, reqSourceIP, reqDestionationPort, []byte(body))
 			}
 		}
 	}
