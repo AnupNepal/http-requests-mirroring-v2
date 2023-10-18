@@ -95,6 +95,7 @@ func (h *httpStream) run() {
 				return
 			}
 			req.Body.Close()
+			log.Println("Request Body:", string(body)) // Log the request body			
 			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 		}
 	}
