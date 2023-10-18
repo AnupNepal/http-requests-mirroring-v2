@@ -24,8 +24,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/examples/util"
@@ -82,8 +82,8 @@ func (h *httpStream) run() {
 	logReader := &loggingReader{originalReader: &h.r}
 	buf := bufio.NewReader(logReader)
 
-	// List of allowed URI paths
-	allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
+	// // List of allowed URI paths
+	// allowedPaths := []string{"/v5/SaveOrder", "/v5/UpdateOrder"}
 
 	var buffer bytes.Buffer
 
@@ -136,8 +136,6 @@ func (h *httpStream) run() {
 		buffer.Reset()
 	}
 }
-
-
 
 // Function to check if a string is in a slice
 func contains(slice []string, str string) bool {
