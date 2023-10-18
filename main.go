@@ -39,6 +39,7 @@ var fwdPerc = flag.Float64("percentage", 100, "Must be between 0 and 100.")
 var fwdBy = flag.String("percentage-by", "", "Can be empty. Otherwise, valid values are: header, remoteaddr.")
 var fwdHeader = flag.String("percentage-by-header", "", "If percentage-by is header, then specify the header here.")
 var reqPort = flag.Int("filter-request-port", 80, "Must be between 0 and 65535.")
+var keepHostHeader = flag.Bool("keep-host-header", false, "Keep Host header from original request.")
 
 // Build a simple HTTP request parser using tcpassembly.StreamFactory and tcpassembly.Stream interfaces
 
@@ -66,13 +67,16 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 func (h *httpStream) run() {
 	buf := bufio.NewReader(&h.r)
 	var data []byte
+	startOfRequest := false
 
 	for {
 		b, err := buf.ReadByte()
 		if err != nil {
 			if err == io.EOF {
-				// Handle EOF here, as the request might not end with "\r\n\r\n".
-				break
+				if startOfRequest {
+					log.Println("Incomplete HTTP request")
+				}
+				return
 			}
 			log.Println("Error reading stream", h.net, h.transport, ":", err)
 			return
@@ -80,9 +84,15 @@ func (h *httpStream) run() {
 
 		data = append(data, b)
 
-		// Check if we've found the end of HTTP headers.
-		if len(data) >= 4 && data[len(data)-4:] == []byte("\r\n\r\n") {
-			req, err := http.ReadRequest(bytes.NewReader(data))
+		// Check if we've found the start of an HTTP request.
+		if len(data) >= 4 {
+			if string(data[len(data)-4:]) == "\r\n\r\n" {
+				startOfRequest = true
+			}
+		}
+
+		if startOfRequest {
+			req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(data)))
 			if err != nil {
 				log.Println("Error parsing HTTP request:", err)
 			} else {
@@ -96,20 +106,9 @@ func (h *httpStream) run() {
 				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
 			data = nil
+			startOfRequest = false
 		}
 	}
-}
-
-func processHTTPRequest(requestBuffer bytes.Buffer) {
-    // At this point, requestBuffer contains the complete HTTP request (request line + headers).
-    // You can pass this data to your forwardRequest function for parsing.
-    // Example:
-    reqSourceIP := h.net.Src().String()
-    reqDestionationPort := h.transport.Dst().String()
-    requestBytes := requestBuffer.Bytes()
-
-    // Call your forwardRequest function here with the extracted request data
-    go forwardRequest(reqSourceIP, reqDestionationPort, requestBytes)
 }
 
 func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
@@ -179,6 +178,10 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	}
 	if forwardReq.Header.Get("X-Forwarded-Host") == "" {
 		forwardReq.Header.Set("X-Forwarded-Host", req.Host)
+	}
+
+	if *keepHostHeader {
+		forwardReq.Host = req.Host
 	}
 
 	// Execute the new HTTP request
