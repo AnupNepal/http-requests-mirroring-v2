@@ -90,13 +90,16 @@ func (h *httpStream) run() {
 		} else {
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
-			body, bErr := ioutil.ReadAll(req.Body)
-			if bErr != nil {
-				return
+			// Check if the request method is POST and the request URI matches the desired path
+			if req.Method == "POST" && req.URL.Path == "/v5/SaveOrder" && req.Proto == "HTTP/1.1" {
+				body, bErr := ioutil.ReadAll(req.Body)
+				if bErr != nil {
+					return
+				}
+				req.Body.Close()
+				log.Println("Request Body:", string(body)) // Log the request body
+				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 			}
-			req.Body.Close()
-			log.Println("Request Body:", string(body)) // Log the request body			
-			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 		}
 	}
 }
