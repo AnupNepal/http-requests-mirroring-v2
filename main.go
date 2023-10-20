@@ -76,7 +76,7 @@ func (lr *loggingReader) Read(p []byte) (n int, err error) {
 		s := strings.ReplaceAll(logString, "\n", `\n`)
 		s2 := strings.ReplaceAll(s, "\r", `\r`)
 
-		log.Printf("TCP Line:", s2)
+		log.Printf("TCP Line Anup :", s2)
 		log.Printf("End TCP Line")
 	}
 	return n, err
