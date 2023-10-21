@@ -24,7 +24,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/google/gopacket"
@@ -65,51 +64,30 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	return &hstream.r
 }
 
-type loggingReader struct {
-	originalReader io.Reader
-}
-
-func (lr *loggingReader) Read(p []byte) (n int, err error) {
-	n, err = lr.originalReader.Read(p)
-	if n > 0 {
-		logString := string(p[:n])
-		s := strings.ReplaceAll(logString, "\n", `\n`)
-		s2 := strings.ReplaceAll(s, "\r", `\r`)
-
-		log.Printf("TCP Line Anup :", s2)
-		log.Printf("End TCP Line")
-	}
-	return n, err
-}
-
 func (h *httpStream) run() {
-	// Wrap the existing reader with the logging reader
-	logReader := &loggingReader{originalReader: &h.r}
-	buf := bufio.NewReader(logReader)
-
+	const maxBufferSize = 10 * 1024 * 1024 // 10 MB
+	buf := bufio.NewReaderSize(&h.r, maxBufferSize)
 	for {
-		// Read bytes from the buffer until there's no more data
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
 			// We must read until we see an EOF... very important!
 			return
-		}
-		if err != nil {
-			log.Println("Error reading HTTP request:", err)
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
 		} else {
+			reqSourceIP := h.net.Src().String()
+			reqDestionationPort := h.transport.Dst().String()
 			body, bErr := ioutil.ReadAll(req.Body)
 			if bErr != nil {
 				return
 			}
 			req.Body.Close()
-			log.Println("Request Body:", string(body)) // Log the request body
-			go forwardRequest(req, body)
-
+			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
 		}
 	}
 }
 
-func forwardRequest(req *http.Request, body []byte) {
+func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
 
 	// if percentage flag is not 100, then a percentage of requests is skipped
 	if *fwdPerc != 100 {
@@ -130,6 +108,8 @@ func forwardRequest(req *http.Request, body []byte) {
 			strForSeed := ""
 			if *fwdBy == "header" {
 				strForSeed = req.Header.Get(*fwdHeader)
+			} else {
+				strForSeed = reqSourceIP
 			}
 			crc64Table := crc64.MakeTable(0xC96C5795D7870F42)
 			// uintForSeed is derived from strForSeed
@@ -161,11 +141,16 @@ func forwardRequest(req *http.Request, body []byte) {
 		}
 	}
 
+	log.Println(forwardReq)
+
 	// Append to X-Forwarded-For the IP of the client or the IP of the latest proxy (if any proxies are in between)
 	// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
-	// forwardReq.Header.Add("X-Forwarded-For", reqSourceIP)
+	forwardReq.Header.Add("X-Forwarded-For", reqSourceIP)
 	// The three following headers should contain 1 value only, i.e. the outermost port, protocol, and host
 	// https://tools.ietf.org/html/rfc7239#section-5.4
+	if forwardReq.Header.Get("X-Forwarded-Port") == "" {
+		forwardReq.Header.Set("X-Forwarded-Port", reqDestionationPort)
+	}
 	if forwardReq.Header.Get("X-Forwarded-Proto") == "" {
 		forwardReq.Header.Set("X-Forwarded-Proto", "http")
 	}
@@ -173,9 +158,21 @@ func forwardRequest(req *http.Request, body []byte) {
 		forwardReq.Header.Set("X-Forwarded-Host", req.Host)
 	}
 
-	if *keepHostHeader {
-		forwardReq.Host = req.Host
+	//if keepHostHeader {
+	forwardReq.Host = req.Host
+	//}
+
+	fmt.Printf("Destination: %s\n", url)
+
+	// Print request headers
+	fmt.Println("Request Headers:")
+	for key, values := range forwardReq.Header {
+		for _, value := range values {
+			fmt.Printf("%s: %s\n", key, value)
+		}
 	}
+
+	fmt.Println(string(body))
 
 	// Execute the new HTTP request
 	httpClient := &http.Client{}
@@ -234,6 +231,9 @@ func main() {
 
 	// Set up BPF filter
 	BPFFilter := fmt.Sprintf("%s%d", "tcp and dst port ", *reqPort)
+
+	log.Println(BPFFilter)
+
 	if err := handle.SetBPFFilter(BPFFilter); err != nil {
 		log.Fatal(err)
 	}
@@ -251,6 +251,8 @@ func main() {
 
 	//Open a TCP Client, for NLB Health Checks only
 	go openTCPClient()
+
+	log.Println("here")
 
 	for {
 		select {
