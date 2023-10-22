@@ -126,14 +126,15 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 		return
 	}
 
+	fmt.Println(string(body2))
+
 	// Your input text
 	inputText := `{"Status":null,"Order":null}`
 
 	if strings.Compare(inputText, string(body2)) == 0 {
-		fmt.Println(string(body2))
+		fmt.Println("Body")
+		fmt.Println(string(body))
 	}
-
-	fmt.Println(string(body2))
 }
 
 func processPacket(packet gopacket.Packet) error {
