@@ -134,7 +134,7 @@ func processPacket(packet gopacket.Packet) error {
 	if appLayer != nil {
 		payload := appLayer.Payload()
 		// Check if it's an HTTP request (typically starts with "GET" or "POST")
-		if strings.HasPrefix(string(payload), "GET") || strings.HasPrefix(string(payload), "POST") || strings.HasPrefix(string(payload), "PUT") {
+		if strings.HasPrefix(string(payload), "POST") || strings.HasPrefix(string(payload), "PUT") {
 			// Process the HTTP request
 			//fmt.Printf("Received HTTP request:\n%s\n", payload)
 
