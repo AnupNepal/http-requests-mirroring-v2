@@ -74,7 +74,7 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 		}
 	}
 
-	log.Println(forwardReq)
+	//log.Println(forwardReq)
 
 	// Append to X-Forwarded-For the IP of the client or the IP of the latest proxy (if any proxies are in between)
 	// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
@@ -97,18 +97,18 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 
 	fmt.Printf("Destination: %s\n", url)
 
-	var headerString strings.Builder
+	// var headerString strings.Builder
 
-	// Print request headers
-	fmt.Println("Request Headers:")
-	for key, values := range forwardReq.Header {
-		for _, value := range values {
-			fmt.Printf("%s: %s\n", key, value)
-			headerString.WriteString(fmt.Sprintf("%s: %s, ", key, value))
+	// // Print request headers
+	// fmt.Println("Request Headers:")
+	// for key, values := range forwardReq.Header {
+	// 	for _, value := range values {
+	// 		fmt.Printf("%s: %s\n", key, value)
+	// 		headerString.WriteString(fmt.Sprintf("%s: %s, ", key, value))
 
-		}
-	}
-	fmt.Println(string(body))
+	// 	}
+	// }
+	// fmt.Println(string(body))
 
 	// Execute the new HTTP request
 	httpClient := &http.Client{}
@@ -134,9 +134,9 @@ func processPacket(packet gopacket.Packet) error {
 	if appLayer != nil {
 		payload := appLayer.Payload()
 		// Check if it's an HTTP request (typically starts with "GET" or "POST")
-		if strings.HasPrefix(string(payload), "GET") || strings.HasPrefix(string(payload), "POST") {
+		if strings.HasPrefix(string(payload), "GET") || strings.HasPrefix(string(payload), "POST") || strings.HasPrefix(string(payload), "PUT") {
 			// Process the HTTP request
-			fmt.Printf("Received HTTP request:\n%s\n", payload)
+			//fmt.Printf("Received HTTP request:\n%s\n", payload)
 
 			payloadStr := string(payload)
 
@@ -157,7 +157,13 @@ func processPacket(packet gopacket.Packet) error {
 				if bErr != nil {
 				}
 				req.Body.Close()
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+				requestUri := strings.ToLower(req.RequestURI)
+
+				fmt.Println("RequestURI:", requestUri)
+
+				if strings.Contains(requestUri, "v5/saveorder") || strings.Contains(requestUri, "v5/updateorder") {
+					go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+				}
 			}
 
 		}
