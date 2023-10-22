@@ -1,18 +1,38 @@
+// Original Copyright 2012 Google, Inc. All rights reserved.
+//
+// Use of this source code is governed by a BSD-style license
+// that can be found in the LICENSE file in the root of the source
+// tree.
+
+// Modification Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: BSD-3-Clause
+
 package main
 
 import (
 	"bufio"
 	"bytes"
+	crypto_rand "crypto/rand"
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"hash/crc64"
 	"io"
 	"io/ioutil"
 	"log"
+	math_rand "math/rand"
+	"net"
 	"net/http"
+	"os"
+	"time"
 	"strings"
 
 	"github.com/google/gopacket"
+	"github.com/google/gopacket/examples/util"
+	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"github.com/google/gopacket/tcpassembly"
+	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
 
 var fwdDestination = flag.String("destination", "", "Destination of the forwarded requests.")
@@ -22,43 +42,90 @@ var fwdHeader = flag.String("percentage-by-header", "", "If percentage-by is hea
 var reqPort = flag.Int("filter-request-port", 80, "Must be between 0 and 65535.")
 var keepHostHeader = flag.Bool("keep-host-header", false, "Keep Host header from original request.")
 
-func main() {
-	flag.Parse()
+// Build a simple HTTP request parser using tcpassembly.StreamFactory and tcpassembly.Stream interfaces
 
-	// Define the network interface to capture packets on
-	ifaceName := "vxlan0" // Change to the appropriate network interface
+// httpStreamFactory implements tcpassembly.StreamFactory
+type httpStreamFactory struct{}
 
-	// Open a packet capture handle on the specified network interface
-	handle, err := pcap.OpenLive(ifaceName, 65536, true, pcap.BlockForever)
-	if err != nil {
-		log.Fatal("Error opening capture:", err)
+// httpStream will handle the actual decoding of http requests.
+type httpStream struct {
+	net, transport gopacket.Flow
+	r              tcpreader.ReaderStream
+}
+
+func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
+	hstream := &httpStream{
+		net:       net,
+		transport: transport,
+		r:         tcpreader.NewReaderStream(),
 	}
-	defer handle.Close()
+	go hstream.run() // Important... we must guarantee that data from the reader stream is read.
 
-	// Set a BPF filter to capture only TCP traffic on port 80 (HTTP)
-	filter := fmt.Sprintf("%s%d", "tcp and dst port ", *reqPort)
-	err = handle.SetBPFFilter(filter)
-	if err != nil {
-		log.Fatal("Error setting BPF filter:", err)
+	// ReaderStream implements tcpassembly.Stream, so we can return a pointer to it.
+	return &hstream.r
+}
+
+func (h *httpStream) run() {
+	buf := bufio.NewReader(&h.r)
+	for {
+		req, err := http.ReadRequest(buf)
+		if err == io.EOF {
+			// We must read until we see an EOF... very important!
+			return
+		} else if err != nil {
+			log.Println("Error reading stream", h.net, h.transport, ":", err)
+		} else {
+			reqSourceIP := h.net.Src().String()
+			reqDestionationPort := h.transport.Dst().String()
+			body, bErr := ioutil.ReadAll(req.Body)
+			if bErr != nil {
+				return
+			}
+			req.Body.Close()
+			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+		}
 	}
-
-	// Start packet capture
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-
-	fmt.Printf("Start Capturing packets")
-
-	for packet := range packetSource.Packets() {
-		// Process received packets
-		processPacket(packet)
-	}
-
-	fmt.Printf("done ")
 }
 
 func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
 
-	fmt.Println("fwdDestination:", *fwdDestination)
+	// if percentage flag is not 100, then a percentage of requests is skipped
+	if *fwdPerc != 100 {
+		var uintForSeed uint64
 
+		if *fwdBy == "" {
+			// if percentage-by is empty, then forward only a certain percentage of requests
+			var b [8]byte
+			_, err := crypto_rand.Read(b[:])
+			if err != nil {
+				log.Println("Error generating crypto random unit for seed", ":", err)
+				return
+			}
+			// uintForSeed is random
+			uintForSeed = binary.LittleEndian.Uint64(b[:])
+		} else {
+			// if percentage-by is not empty, then forward only requests from a certain percentage of headers/remoteaddresses
+			strForSeed := ""
+			if *fwdBy == "header" {
+				strForSeed = req.Header.Get(*fwdHeader)
+			} else {
+				strForSeed = reqSourceIP
+			}
+			crc64Table := crc64.MakeTable(0xC96C5795D7870F42)
+			// uintForSeed is derived from strForSeed
+			uintForSeed = crc64.Checksum([]byte(strForSeed), crc64Table)
+		}
+
+		// generate a consistent random number from the variable uintForSeed
+		math_rand.Seed(int64(uintForSeed))
+		randomPercent := math_rand.Float64() * 100
+		// skip a percentage of requests
+		if randomPercent > *fwdPerc {
+			return
+		}
+	}
+
+	// create a new url from the raw RequestURI sent by the client
 	url := fmt.Sprintf("%s%s", string(*fwdDestination), req.RequestURI)
 
 	// create a new HTTP request
@@ -74,8 +141,6 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 		}
 	}
 
-	//log.Println(forwardReq)
-
 	// Append to X-Forwarded-For the IP of the client or the IP of the latest proxy (if any proxies are in between)
 	// https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
 	forwardReq.Header.Add("X-Forwarded-For", reqSourceIP)
@@ -90,25 +155,10 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	if forwardReq.Header.Get("X-Forwarded-Host") == "" {
 		forwardReq.Header.Set("X-Forwarded-Host", req.Host)
 	}
-
-	//if keepHostHeader {
-	//forwardReq.Host = req.Host
-	//}
-
-	fmt.Printf("Destination: %s\n", url)
-
-	// var headerString strings.Builder
-
-	// // Print request headers
-	// fmt.Println("Request Headers:")
-	// for key, values := range forwardReq.Header {
-	// 	for _, value := range values {
-	// 		fmt.Printf("%s: %s\n", key, value)
-	// 		headerString.WriteString(fmt.Sprintf("%s: %s, ", key, value))
-
-	// 	}
+	
+	// if keepHostHeader {
+	// 	forwardReq.Host = req.Host
 	// }
-	// fmt.Println(string(body))
 
 	// Execute the new HTTP request
 	httpClient := &http.Client{}
@@ -137,47 +187,87 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	}
 }
 
-func processPacket(packet gopacket.Packet) error {
-	appLayer := packet.ApplicationLayer()
-	networkLayer := packet.NetworkLayer()
-	if appLayer != nil {
-		payload := appLayer.Payload()
-		// Check if it's an HTTP request (typically starts with "GET" or "POST")
-		if strings.HasPrefix(string(payload), "POST") || strings.HasPrefix(string(payload), "PUT") {
-			// Process the HTTP request
-			//fmt.Printf("Received HTTP request:\n%s\n", payload)
-
-			payloadStr := string(payload)
-
-			payloadReader := bufio.NewReader(strings.NewReader(payloadStr))
-
-			// Create an HTTP request based on the payload
-			req, err := http.ReadRequest(payloadReader)
-			if err == io.EOF {
-				// We must read until we see an EOF... very important!
-				return nil
-			} else if err != nil {
-				log.Println("Error reading stream ", err)
-				return err
-			} else {
-				reqSourceIP := networkLayer.NetworkFlow().Src().String()
-				reqDestionationPort := networkLayer.NetworkFlow().Dst().String()
-				body, bErr := ioutil.ReadAll(req.Body)
-				if bErr != nil {
-				}
-				req.Body.Close()
-				requestUri := strings.ToLower(req.RequestURI)
-
-				fmt.Println("RequestURI:", requestUri)
-
-				if strings.Contains(requestUri, "v5/saveorder") || strings.Contains(requestUri, "v5/updateorder") {
-					go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
-				}
-			}
-
-		}
-	} else {
-
+// Listen for incoming connections.
+func openTCPClient() {
+	ln, err := net.Listen("tcp", ":4789")
+	if err != nil {
+		// If TCP listener cannot be established, NLB health checks would fail
+		// For this reason, we OS.exit
+		log.Println("Error listening on TCP", ":", err)
+		os.Exit(1)
 	}
-	return nil
+	log.Println("Listening on TCP 4789")
+	for {
+		// Listen for an incoming connection and close it immediately.
+		conn, _ := ln.Accept()
+		conn.Close()
+	}
+}
+
+func main() {
+	defer util.Run()()
+	var handle *pcap.Handle
+	var err error
+
+	flag.Parse()
+	//labels validation
+	if *fwdPerc > 100 || *fwdPerc < 0 {
+		err = fmt.Errorf("Flag percentage is not between 0 and 100. Value: %f.", *fwdPerc)
+	} else if *fwdBy != "" && *fwdBy != "header" && *fwdBy != "remoteaddr" {
+		err = fmt.Errorf("Flag percentage-by (%s) is not valid.", *fwdBy)
+	} else if *fwdBy == "header" && *fwdHeader == "" {
+		err = fmt.Errorf("Flag percentage-by is set to header, but percentage-by-header is empty.")
+	} else if *reqPort > 65535 || *reqPort < 0 {
+		err = fmt.Errorf("Flag filter-request-port is not between 0 and 65535. Value: %f.", *fwdPerc)
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Set up pcap packet capture
+	log.Printf("Starting capture on interface vxlan0")
+	handle, err = pcap.OpenLive("vxlan0", 65536, true, pcap.BlockForever)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Set up BPF filter
+	BPFFilter := fmt.Sprintf("%s%d", "tcp and dst port ", *reqPort)
+	if err := handle.SetBPFFilter(BPFFilter); err != nil {
+		log.Fatal(err)
+	}
+
+	// Set up assembly
+	streamFactory := &httpStreamFactory{}
+	streamPool := tcpassembly.NewStreamPool(streamFactory)
+	assembler := tcpassembly.NewAssembler(streamPool)
+
+	log.Println("reading in packets")
+	// Read in packets, pass to assembler.
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	packets := packetSource.Packets()
+	ticker := time.Tick(time.Minute)
+
+	//Open a TCP Client, for NLB Health Checks only
+	go openTCPClient()
+
+	for {
+		select {
+		case packet := <-packets:
+			// A nil packet indicates the end of a pcap file.
+			if packet == nil {
+				return
+			}
+			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
+				log.Println("Unusable packet")
+				continue
+			}
+			tcp := packet.TransportLayer().(*layers.TCP)
+			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
+
+		case <-ticker:
+			// Every minute, flush connections that haven't seen activity in the past 1 minute.
+			assembler.FlushOlderThan(time.Now().Add(time.Minute * -1))
+		}
+	}
 }
