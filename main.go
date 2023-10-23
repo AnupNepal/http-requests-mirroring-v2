@@ -182,7 +182,7 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	inputText := `{"Status":null,"Order":null}`
 
 	if strings.Compare(inputText, string(body2)) == 0 {
-		fmt.Println("Bodys")
+		fmt.Println("Body")
 		fmt.Println(string(body))
 	}
 }
@@ -226,7 +226,7 @@ func main() {
 
 	// Set up pcap packet capture
 	log.Printf("Starting capture on interface vxlan0")
-	handle, err = pcap.OpenLive("vxlan0", 65536, true, pcap.BlockForever)
+	handle, err = pcap.OpenLive("vxlan0", 655360, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)
 	}
