@@ -74,6 +74,7 @@ func (h *httpStream) run() {
 			return
 		} else if err != nil {
 			log.Println("Error reading stream", h.net, h.transport, ":", err)
+			return
 		} else {
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
@@ -82,7 +83,10 @@ func (h *httpStream) run() {
 				return
 			}
 			req.Body.Close()
-			go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+			requestUri := strings.ToLower(req.RequestURI)
+			if strings.Contains(requestUri, "v5/saveorder") || strings.Contains(requestUri, "v5/updateorder") {
+				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+			}
 		}
 	}
 }
