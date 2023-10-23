@@ -182,8 +182,8 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	inputText := `{"Status":null,"Order":null}`
 
 	if strings.Compare(inputText, string(body2)) == 0 {
-		fmt.Println("Body")
-		fmt.Println(string(body))
+		//fmt.Println("tchNo ma")
+		//fmt.Println(string(body))
 	}
 }
 
