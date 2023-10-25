@@ -74,7 +74,7 @@ func (h *httpStream) run() {
 			return
 		} else if err != nil {
 			log.Println("Error reading stream", h.net, h.transport, ":", err)
-			return
+			//return
 		} else {
 			reqSourceIP := h.net.Src().String()
 			reqDestionationPort := h.transport.Dst().String()
@@ -180,7 +180,7 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 		return
 	}
 
-	fmt.Println(string(body2))
+	//log.Println(string(body2))
 
 	// Your input text
 	inputText := `{"Status":null,"Order":null}`
