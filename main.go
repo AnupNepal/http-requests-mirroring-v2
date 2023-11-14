@@ -24,8 +24,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/examples/util"
@@ -84,14 +84,19 @@ func (h *httpStream) run() {
 			}
 			req.Body.Close()
 			requestUri := strings.ToLower(req.RequestURI)
+			overwriteUrl := ""
+
 			if strings.Contains(requestUri, "v5/saveorder") || strings.Contains(requestUri, "v5/updateorder") {
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, body)
+				go forwardRequest(req, reqSourceIP, reqDestionationPort, body, &overwriteUrl)
+			} else {
+				overwriteUrl = "https://loyalty-api.staging.abacus.co"
+				go forwardRequest(req, reqSourceIP, reqDestionationPort, body, &overwriteUrl)
 			}
 		}
 	}
 }
 
-func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte) {
+func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort string, body []byte, overwriteUrl *string) {
 
 	// if percentage flag is not 100, then a percentage of requests is skipped
 	if *fwdPerc != 100 {
@@ -130,7 +135,17 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	}
 
 	// create a new url from the raw RequestURI sent by the client
-	url := fmt.Sprintf("%s%s", string(*fwdDestination), req.RequestURI)
+	//url := fmt.Sprintf("%s%s", string(*fwdDestination), req.RequestURI)
+
+	var url string
+
+	if overwriteUrl == nil || *overwriteUrl == "" {
+		// If overwriteUrl is empty or nil, use fwdDestination
+		url = fmt.Sprintf("%s%s", string(*fwdDestination), req.RequestURI)
+	} else {
+		// If overwriteUrl is not empty, use it
+		url = fmt.Sprintf("%s%s", string(*overwriteUrl), req.RequestURI)
+	}
 
 	// create a new HTTP request
 	forwardReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
@@ -159,7 +174,7 @@ func forwardRequest(req *http.Request, reqSourceIP string, reqDestionationPort s
 	if forwardReq.Header.Get("X-Forwarded-Host") == "" {
 		forwardReq.Header.Set("X-Forwarded-Host", req.Host)
 	}
-	
+
 	// if keepHostHeader {
 	// 	forwardReq.Host = req.Host
 	// }
