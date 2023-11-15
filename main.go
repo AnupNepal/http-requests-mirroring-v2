@@ -90,7 +90,7 @@ func (h *httpStream) run() {
 				go forwardRequest(req, reqSourceIP, reqDestionationPort, body, &overwriteUrl)
 			} else {
 				overwriteUrl = "https://loyalty-api.staging.abacus.co"
-				go forwardRequest(req, reqSourceIP, reqDestionationPort, body, &overwriteUrl)
+				//go forwardRequest(req, reqSourceIP, reqDestionationPort, body, &overwriteUrl)
 			}
 		}
 	}
